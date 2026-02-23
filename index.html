@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Budget Planner 🇸🇮</title>
+
 <link rel="manifest" href="manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 :root {
-  --bg:#f4f6f8; --card:#fff; --text:#000;
+  --bg:#f4f6f8; --card:#fff; --text:#000; --danger:#dc2626;
 }
 .dark {
   --bg:#0f172a; --card:#020617; --text:#e5e7eb;
 }
 body {
-  margin:0;
   background:var(--bg);
   color:var(--text);
   font-family:system-ui;
@@ -25,15 +25,17 @@ body {
 }
 .card {
   background:var(--card);
+  max-width:440px;
   width:100%;
-  max-width:430px;
   padding:16px;
   border-radius:14px;
 }
 .row { display:flex; justify-content:space-between; margin:6px 0; }
 input { width:110px; }
-button { padding:6px 10px; }
-h3 { margin-top:16px; }
+.warn { color:var(--danger); font-size:12px; }
+.over { border:2px solid var(--danger); }
+button { padding:6px 10px; margin:4px 0; }
+canvas { margin-top:10px; }
 hr { opacity:.3 }
 </style>
 </head>
@@ -51,10 +53,19 @@ hr { opacity:.3 }
 </div>
 
 <div class="row"><span>Weekly Budget (€)</span><input id="budget"></div>
-<div class="row"><span>Shopping</span><input class="e"></div>
-<div class="row"><span>Boni</span><input class="e"></div>
-<div class="row"><span>Food</span><input class="e"></div>
-<div class="row"><span>Groceries</span><input class="e"></div>
+
+<!-- Category limits -->
+<div class="row"><span>Shopping</span><input class="e" data-limit="5"></div>
+<div class="warn" id="w0"></div>
+
+<div class="row"><span>Boni</span><input class="e" data-limit="4"></div>
+<div class="warn" id="w1"></div>
+
+<div class="row"><span>Food</span><input class="e" data-limit="4"></div>
+<div class="warn" id="w2"></div>
+
+<div class="row"><span>Groceries</span><input class="e" data-limit="6"></div>
+<div class="warn" id="w3"></div>
 
 <p>Weekly Spent: €<span id="spent">0</span></p>
 <p id="weeklyResult"></p>
@@ -68,109 +79,116 @@ hr { opacity:.3 }
 <p class="profit">Total Profit: €<span id="mProfit">0</span></p>
 <p class="loss">Total Loss: €<span id="mLoss">0</span></p>
 
+<canvas id="monthChart"></canvas>
+
+<button onclick="exportPDF()">📤 Export Monthly PDF</button>
+
 </div>
 
 <script>
 /* 🔐 PIN LOCK */
-let pin = localStorage.getItem("pin");
-if(!pin){
-  pin = prompt("Set a 4-digit PIN");
-  localStorage.setItem("pin", pin);
-}else if(prompt("Enter PIN") !== pin){
-  document.body.innerHTML="🔒 Locked";
-}
+let pin=localStorage.getItem("pin");
+if(!pin){ pin=prompt("Set a 4-digit PIN"); localStorage.setItem("pin",pin); }
+else if(prompt("Enter PIN")!==pin){ document.body.innerHTML="🔒 Locked"; }
 
 /* 🌙 DARK MODE */
 if(localStorage.dark==="1") document.body.classList.add("dark");
 function toggleDark(){
   document.body.classList.toggle("dark");
-  localStorage.dark = document.body.classList.contains("dark")?"1":"0";
+  localStorage.dark=document.body.classList.contains("dark")?"1":"0";
 }
 
 /* 📅 WEEK LOGIC */
-let monday = new Date();
-monday.setDate(monday.getDate() - ((monday.getDay()+6)%7));
+let monday=new Date();
+monday.setDate(monday.getDate()-((monday.getDay()+6)%7));
 monday.setHours(0,0,0,0);
 
-const chartCtx = document.getElementById("weekChart");
-let chart;
-
-function weekKey(d){ return d.toISOString().split("T")[0]; }
-
-function weekRangeText(m){
-  let end = new Date(m);
-  end.setDate(m.getDate()+6);
-  return `${m.toLocaleDateString("en-GB")} – ${end.toLocaleDateString("en-GB")}`;
+function key(d){ return d.toISOString().split("T")[0]; }
+function range(m){
+  let e=new Date(m); e.setDate(m.getDate()+6);
+  return `${m.toLocaleDateString("en-GB")} – ${e.toLocaleDateString("en-GB")}`;
 }
 
-function loadWeek(){
-  weekRange.textContent = "Week: " + weekRangeText(monday);
+let weekChart, monthChart;
 
-  const data = JSON.parse(localStorage.getItem(weekKey(monday))) ||
-               { b:15, e:[0,0,0,0] };
+function loadWeek(auto=false){
+  weekRange.textContent="Week: "+range(monday);
+  let data=JSON.parse(localStorage.getItem(key(monday)));
 
-  budget.value = data.b;
+  if(!data && auto){
+    const prev=new Date(monday); prev.setDate(prev.getDate()-7);
+    const p=JSON.parse(localStorage.getItem(key(prev)));
+    data={ b:p?p.b:15, e:[0,0,0,0] };
+  }
+
+  data=data||{ b:15, e:[0,0,0,0] };
+  budget.value=data.b;
   document.querySelectorAll(".e").forEach((i,n)=>i.value=data.e[n]);
   calculate();
   calculateMonth();
 }
 
 function calculate(){
-  const e = [...document.querySelectorAll(".e")].map(i=>+i.value);
-  const total = e.reduce((a,b)=>a+b,0);
-  spent.textContent = total.toFixed(2);
+  let e=[...document.querySelectorAll(".e")].map(i=>+i.value);
+  let total=e.reduce((a,b)=>a+b,0);
+  spent.textContent=total.toFixed(2);
 
-  const diff = budget.value - total;
-  weeklyResult.textContent = diff>=0 ? `Weekly Profit: €${diff.toFixed(2)}` :
-                                       `Weekly Loss: €${Math.abs(diff).toFixed(2)}`;
+  e.forEach((v,i)=>{
+    let lim=document.querySelectorAll(".e")[i].dataset.limit;
+    let w=document.getElementById("w"+i);
+    let inp=document.querySelectorAll(".e")[i];
+    if(v>lim){ inp.classList.add("over"); w.textContent=`⚠ Limit €${lim} exceeded`; }
+    else{ inp.classList.remove("over"); w.textContent=""; }
+  });
 
-  localStorage.setItem(weekKey(monday), JSON.stringify({b:+budget.value,e}));
+  let diff=budget.value-total;
+  weeklyResult.textContent=diff>=0?`Weekly Profit €${diff}`:`Weekly Loss €${-diff}`;
 
-  if(chart) chart.destroy();
-  chart = new Chart(chartCtx,{
-    type:"pie",
-    data:{ labels:["Shopping","Boni","Food","Groceries"], datasets:[{data:e}] }
+  localStorage.setItem(key(monday),JSON.stringify({b:+budget.value,e}));
+
+  if(weekChart) weekChart.destroy();
+  weekChart=new Chart(weekChartCtx,{type:"pie",
+    data:{labels:["Shopping","Boni","Food","Groceries"],datasets:[{data:e}]}
   });
 }
 
 function calculateMonth(){
-  const month = monday.getMonth();
-  const year = monday.getFullYear();
-
-  let MB=0, MP=0, ML=0;
+  const m=monday.getMonth(), y=monday.getFullYear();
+  let MB=0, MP=0, ML=0, cat=[0,0,0,0];
 
   Object.keys(localStorage).forEach(k=>{
-    const d = new Date(k);
-    if(!isNaN(d) && d.getMonth()==month && d.getFullYear()==year){
-      const x = JSON.parse(localStorage[k]);
-      const spent = x.e.reduce((a,b)=>a+b,0);
-      MB += x.b;
-      spent <= x.b ? MP += (x.b-spent) : ML += (spent-x.b);
+    let d=new Date(k);
+    if(!isNaN(d)&&d.getMonth()==m&&d.getFullYear()==y){
+      let x=JSON.parse(localStorage[k]);
+      let s=x.e.reduce((a,b)=>a+b,0);
+      MB+=x.b; s<=x.b?MP+=x.b-s:ML+=s-x.b;
+      x.e.forEach((v,i)=>cat[i]+=v);
     }
   });
 
-  monthTitle.textContent =
-    `Month: ${new Date(year,month).toLocaleString("en",{month:"long"})} `+
-    `(${new Date(year,month,1).toLocaleDateString("en-GB")} – `+
-    `${new Date(year,month+1,0).toLocaleDateString("en-GB")})`;
+  monthTitle.textContent=`Month: ${new Date(y,m).toLocaleString("en",{month:"long"})}`;
+  mBudget.textContent=MB; mProfit.textContent=MP; mLoss.textContent=ML;
 
-  mBudget.textContent = MB.toFixed(2);
-  mProfit.textContent = MP.toFixed(2);
-  mLoss.textContent = ML.toFixed(2);
+  if(monthChart) monthChart.destroy();
+  monthChart=new Chart(monthChartCtx,{type:"pie",
+    data:{labels:["Shopping","Boni","Food","Groceries"],datasets:[{data:cat}]}
+  });
 }
 
 function changeWeek(n){
   monday.setDate(monday.getDate()+7*n);
-  loadWeek();
+  loadWeek(true);
 }
 
+function exportPDF(){ window.print(); }
+
 document.querySelectorAll("input").forEach(i=>i.oninput=calculate);
+const weekChartCtx=document.getElementById("weekChart");
+const monthChartCtx=document.getElementById("monthChart");
 loadWeek();
 
 /* 📱 PWA */
-if("serviceWorker" in navigator){
-  navigator.serviceWorker.register("sw.js");
-}
+if("serviceWorker"in navigator) navigator.serviceWorker.register("sw.js");
 </script>
 </body>
 </html>
