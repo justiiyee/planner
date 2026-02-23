@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budget Planner 🇸🇮</title>
+<link rel="manifest" href="manifest.json">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root {
+  --bg:#f4f6f8; --card:#fff; --text:#000;
+}
+.dark {
+  --bg:#0f172a; --card:#020617; --text:#e5e7eb;
+}
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:system-ui;
+  display:flex;
+  justify-content:center;
+  padding:16px;
+}
+.card {
+  background:var(--card);
+  width:100%;
+  max-width:430px;
+  padding:16px;
+  border-radius:14px;
+}
+.row { display:flex; justify-content:space-between; margin:6px 0; }
+input { width:110px; }
+button { padding:6px 10px; }
+h3 { margin-top:16px; }
+hr { opacity:.3 }
+</style>
+</head>
+
+<body>
+<div class="card">
+
+<button onclick="toggleDark()">🌙</button>
+
+<h2 id="weekRange"></h2>
+
+<div class="row">
+  <button onclick="changeWeek(-1)">⟵ Previous</button>
+  <button onclick="changeWeek(1)">Next ⟶</button>
+</div>
+
+<div class="row"><span>Weekly Budget (€)</span><input id="budget"></div>
+<div class="row"><span>Shopping</span><input class="e"></div>
+<div class="row"><span>Boni</span><input class="e"></div>
+<div class="row"><span>Food</span><input class="e"></div>
+<div class="row"><span>Groceries</span><input class="e"></div>
+
+<p>Weekly Spent: €<span id="spent">0</span></p>
+<p id="weeklyResult"></p>
+
+<canvas id="weekChart"></canvas>
+
+<hr>
+
+<h3 id="monthTitle"></h3>
+<p>Total Budget: €<span id="mBudget">0</span></p>
+<p class="profit">Total Profit: €<span id="mProfit">0</span></p>
+<p class="loss">Total Loss: €<span id="mLoss">0</span></p>
+
+</div>
+
+<script>
+/* 🔐 PIN LOCK */
+let pin = localStorage.getItem("pin");
+if(!pin){
+  pin = prompt("Set a 4-digit PIN");
+  localStorage.setItem("pin", pin);
+}else if(prompt("Enter PIN") !== pin){
+  document.body.innerHTML="🔒 Locked";
+}
+
+/* 🌙 DARK MODE */
+if(localStorage.dark==="1") document.body.classList.add("dark");
+function toggleDark(){
+  document.body.classList.toggle("dark");
+  localStorage.dark = document.body.classList.contains("dark")?"1":"0";
+}
+
+/* 📅 WEEK LOGIC */
+let monday = new Date();
+monday.setDate(monday.getDate() - ((monday.getDay()+6)%7));
+monday.setHours(0,0,0,0);
+
+const chartCtx = document.getElementById("weekChart");
+let chart;
+
+function weekKey(d){ return d.toISOString().split("T")[0]; }
+
+function weekRangeText(m){
+  let end = new Date(m);
+  end.setDate(m.getDate()+6);
+  return `${m.toLocaleDateString("en-GB")} – ${end.toLocaleDateString("en-GB")}`;
+}
+
+function loadWeek(){
+  weekRange.textContent = "Week: " + weekRangeText(monday);
+
+  const data = JSON.parse(localStorage.getItem(weekKey(monday))) ||
+               { b:15, e:[0,0,0,0] };
+
+  budget.value = data.b;
+  document.querySelectorAll(".e").forEach((i,n)=>i.value=data.e[n]);
+  calculate();
+  calculateMonth();
+}
+
+function calculate(){
+  const e = [...document.querySelectorAll(".e")].map(i=>+i.value);
+  const total = e.reduce((a,b)=>a+b,0);
+  spent.textContent = total.toFixed(2);
+
+  const diff = budget.value - total;
+  weeklyResult.textContent = diff>=0 ? `Weekly Profit: €${diff.toFixed(2)}` :
+                                       `Weekly Loss: €${Math.abs(diff).toFixed(2)}`;
+
+  localStorage.setItem(weekKey(monday), JSON.stringify({b:+budget.value,e}));
+
+  if(chart) chart.destroy();
+  chart = new Chart(chartCtx,{
+    type:"pie",
+    data:{ labels:["Shopping","Boni","Food","Groceries"], datasets:[{data:e}] }
+  });
+}
+
+function calculateMonth(){
+  const month = monday.getMonth();
+  const year = monday.getFullYear();
+
+  let MB=0, MP=0, ML=0;
+
+  Object.keys(localStorage).forEach(k=>{
+    const d = new Date(k);
+    if(!isNaN(d) && d.getMonth()==month && d.getFullYear()==year){
+      const x = JSON.parse(localStorage[k]);
+      const spent = x.e.reduce((a,b)=>a+b,0);
+      MB += x.b;
+      spent <= x.b ? MP += (x.b-spent) : ML += (spent-x.b);
+    }
+  });
+
+  monthTitle.textContent =
+    `Month: ${new Date(year,month).toLocaleString("en",{month:"long"})} `+
+    `(${new Date(year,month,1).toLocaleDateString("en-GB")} – `+
+    `${new Date(year,month+1,0).toLocaleDateString("en-GB")})`;
+
+  mBudget.textContent = MB.toFixed(2);
+  mProfit.textContent = MP.toFixed(2);
+  mLoss.textContent = ML.toFixed(2);
+}
+
+function changeWeek(n){
+  monday.setDate(monday.getDate()+7*n);
+  loadWeek();
+}
+
+document.querySelectorAll("input").forEach(i=>i.oninput=calculate);
+loadWeek();
+
+/* 📱 PWA */
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js");
+}
+</script>
+</body>
+</html>
