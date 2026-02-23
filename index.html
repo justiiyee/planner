@@ -21,29 +21,32 @@ body {
   font-family:system-ui;
   display:flex;
   justify-content:center;
-  padding:16px;
+  padding:14px;
 }
 .card {
   background:var(--card);
-  max-width:440px;
   width:100%;
+  max-width:460px;
   padding:16px;
   border-radius:14px;
 }
 .row { display:flex; justify-content:space-between; margin:6px 0; }
 input { width:110px; }
-.warn { color:var(--danger); font-size:12px; }
+button { padding:6px 10px; margin:4px 2px; }
 .over { border:2px solid var(--danger); }
-button { padding:6px 10px; margin:4px 0; }
+.warn { color:var(--danger); font-size:12px; }
 canvas { margin-top:10px; }
-hr { opacity:.3 }
+hr { opacity:.3; margin:12px 0; }
 </style>
 </head>
 
 <body>
 <div class="card">
 
-<button onclick="toggleDark()">🌙</button>
+<div style="display:flex;justify-content:space-between;">
+  <button onclick="toggleDark()">🌙</button>
+  <button onclick="switchUser()">👤 Switch User</button>
+</div>
 
 <h2 id="weekRange"></h2>
 
@@ -54,7 +57,6 @@ hr { opacity:.3 }
 
 <div class="row"><span>Weekly Budget (€)</span><input id="budget"></div>
 
-<!-- Category limits -->
 <div class="row"><span>Shopping</span><input class="e" data-limit="5"></div>
 <div class="warn" id="w0"></div>
 
@@ -76,8 +78,8 @@ hr { opacity:.3 }
 
 <h3 id="monthTitle"></h3>
 <p>Total Budget: €<span id="mBudget">0</span></p>
-<p class="profit">Total Profit: €<span id="mProfit">0</span></p>
-<p class="loss">Total Loss: €<span id="mLoss">0</span></p>
+<p>Total Profit: €<span id="mProfit">0</span></p>
+<p>Total Loss: €<span id="mLoss">0</span></p>
 
 <canvas id="monthChart"></canvas>
 
@@ -86,10 +88,32 @@ hr { opacity:.3 }
 </div>
 
 <script>
-/* 🔐 PIN LOCK */
-let pin=localStorage.getItem("pin");
-if(!pin){ pin=prompt("Set a 4-digit PIN"); localStorage.setItem("pin",pin); }
-else if(prompt("Enter PIN")!==pin){ document.body.innerHTML="🔒 Locked"; }
+/* 👤 MULTI-USER + PIN */
+let currentUser = localStorage.getItem("currentUser");
+let users = JSON.parse(localStorage.getItem("users")) || {};
+
+if (!currentUser) {
+  currentUser = prompt("Enter your username");
+  if (!currentUser) location.reload();
+  localStorage.setItem("currentUser", currentUser);
+}
+
+if (!users[currentUser]) {
+  const pin = prompt(`Set a 4-digit PIN for ${currentUser}`);
+  users[currentUser] = { pin };
+  localStorage.setItem("users", JSON.stringify(users));
+} else {
+  const attempt = prompt(`Enter PIN for ${currentUser}`);
+  if (attempt !== users[currentUser].pin) {
+    document.body.innerHTML = "🔒 Wrong PIN";
+    throw new Error("Unauthorized");
+  }
+}
+
+function switchUser(){
+  localStorage.removeItem("currentUser");
+  location.reload();
+}
 
 /* 🌙 DARK MODE */
 if(localStorage.dark==="1") document.body.classList.add("dark");
@@ -103,7 +127,8 @@ let monday=new Date();
 monday.setDate(monday.getDate()-((monday.getDay()+6)%7));
 monday.setHours(0,0,0,0);
 
-function key(d){ return d.toISOString().split("T")[0]; }
+function key(d){ return `${currentUser}:${d.toISOString().split("T")[0]}`; }
+
 function range(m){
   let e=new Date(m); e.setDate(m.getDate()+6);
   return `${m.toLocaleDateString("en-GB")} – ${e.toLocaleDateString("en-GB")}`;
@@ -116,9 +141,9 @@ function loadWeek(auto=false){
   let data=JSON.parse(localStorage.getItem(key(monday)));
 
   if(!data && auto){
-    const prev=new Date(monday); prev.setDate(prev.getDate()-7);
-    const p=JSON.parse(localStorage.getItem(key(prev)));
-    data={ b:p?p.b:15, e:[0,0,0,0] };
+    let p=new Date(monday); p.setDate(p.getDate()-7);
+    let prev=JSON.parse(localStorage.getItem(key(p)));
+    data={ b:prev?prev.b:15, e:[0,0,0,0] };
   }
 
   data=data||{ b:15, e:[0,0,0,0] };
@@ -135,8 +160,8 @@ function calculate(){
 
   e.forEach((v,i)=>{
     let lim=document.querySelectorAll(".e")[i].dataset.limit;
-    let w=document.getElementById("w"+i);
     let inp=document.querySelectorAll(".e")[i];
+    let w=document.getElementById("w"+i);
     if(v>lim){ inp.classList.add("over"); w.textContent=`⚠ Limit €${lim} exceeded`; }
     else{ inp.classList.remove("over"); w.textContent=""; }
   });
@@ -147,30 +172,36 @@ function calculate(){
   localStorage.setItem(key(monday),JSON.stringify({b:+budget.value,e}));
 
   if(weekChart) weekChart.destroy();
-  weekChart=new Chart(weekChartCtx,{type:"pie",
+  weekChart=new Chart(document.getElementById("weekChart"),{
+    type:"pie",
     data:{labels:["Shopping","Boni","Food","Groceries"],datasets:[{data:e}]}
   });
 }
 
 function calculateMonth(){
-  const m=monday.getMonth(), y=monday.getFullYear();
+  let m=monday.getMonth(), y=monday.getFullYear();
   let MB=0, MP=0, ML=0, cat=[0,0,0,0];
 
   Object.keys(localStorage).forEach(k=>{
-    let d=new Date(k);
-    if(!isNaN(d)&&d.getMonth()==m&&d.getFullYear()==y){
-      let x=JSON.parse(localStorage[k]);
-      let s=x.e.reduce((a,b)=>a+b,0);
-      MB+=x.b; s<=x.b?MP+=x.b-s:ML+=s-x.b;
-      x.e.forEach((v,i)=>cat[i]+=v);
+    if(k.startsWith(currentUser+":")){
+      let d=new Date(k.split(":")[1]);
+      if(d.getMonth()==m&&d.getFullYear()==y){
+        let x=JSON.parse(localStorage[k]);
+        let s=x.e.reduce((a,b)=>a+b,0);
+        MB+=x.b; s<=x.b?MP+=x.b-s:ML+=s-x.b;
+        x.e.forEach((v,i)=>cat[i]+=v);
+      }
     }
   });
 
   monthTitle.textContent=`Month: ${new Date(y,m).toLocaleString("en",{month:"long"})}`;
-  mBudget.textContent=MB; mProfit.textContent=MP; mLoss.textContent=ML;
+  mBudget.textContent=MB.toFixed(2);
+  mProfit.textContent=MP.toFixed(2);
+  mLoss.textContent=ML.toFixed(2);
 
   if(monthChart) monthChart.destroy();
-  monthChart=new Chart(monthChartCtx,{type:"pie",
+  monthChart=new Chart(document.getElementById("monthChart"),{
+    type:"pie",
     data:{labels:["Shopping","Boni","Food","Groceries"],datasets:[{data:cat}]}
   });
 }
@@ -183,8 +214,6 @@ function changeWeek(n){
 function exportPDF(){ window.print(); }
 
 document.querySelectorAll("input").forEach(i=>i.oninput=calculate);
-const weekChartCtx=document.getElementById("weekChart");
-const monthChartCtx=document.getElementById("monthChart");
 loadWeek();
 
 /* 📱 PWA */
